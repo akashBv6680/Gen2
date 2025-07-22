@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 import pycaret.classification as clf
 import pycaret.regression as reg
+import smtplib
+import ssl
+from email.message import EmailMessage
 import matplotlib
 import warnings
 import imaplib
-import smtplib
 import email
-from email.message import EmailMessage
-import ssl
 import requests
 
 # === Fix font warnings ===
@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore", module="matplotlib")
 
 # === Email & API Config ===
 EMAIL_ADDRESS = "akashvishnu6680@gmail.com"
-EMAIL_PASSWORD = "swpe pwsx ypqo hgnk"  
+EMAIL_PASSWORD = "swpe pwsx ypqo hgnk"  # Use Gmail App Password
 TOGETHER_API_KEY = "tgp_v1_ecSsk1__FlO2mB_gAaaP2i-Affa6Dv8OCVngkWzBJUY"
 
 IMAP_SERVER = "imap.gmail.com"
@@ -63,7 +63,6 @@ def fetch_latest_email():
         st.error(f"❌ Email error: {e}")
         return None, None, None
 
-
 def generate_reply_together_ai(msg):
     url = "https://api.together.xyz/v1/chat/completions"
     headers = {
@@ -80,7 +79,6 @@ def generate_reply_together_ai(msg):
     }
     response = requests.post(url, headers=headers, json=payload)
     return response.json()["choices"][0]["message"]["content"]
-
 
 def send_reply(to_email, subject, body):
     try:
@@ -112,7 +110,7 @@ if uploaded_file and target:
     st.dataframe(df.head())
 
     if ml_type == "Classification":
-        clf.setup(data=df, target=target, session_id=123)
+        clf.setup(data=df, target=target, session_id=123, fold=3, n_jobs=-1, html=False)
         model = clf.compare_models()
         tuned_model = clf.tune_model(model)
         clf.evaluate_model(tuned_model)
@@ -120,7 +118,7 @@ if uploaded_file and target:
         clf.save_model(tuned_model, 'my_model')
         st.success("✅ Classification model trained and saved.")
     else:
-        reg.setup(data=df, target=target, session_id=123)
+        reg.setup(data=df, target=target, session_id=123, fold=3, n_jobs=-1, html=False)
         model = reg.compare_models()
         tuned_model = reg.tune_model(model)
         reg.evaluate_model(tuned_model)
