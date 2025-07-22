@@ -1,34 +1,136 @@
 import streamlit as st
 import pandas as pd
-import pycaret.classification as clf
-import pycaret.regression as reg
+import numpy as np
+import requests
+import pickle
 import smtplib
-import ssl
+import seaborn as sns
+import matplotlib.pyplot as plt
+import os
 from email.message import EmailMessage
-import matplotlib
-import warnings
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, r2_score
+from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.svm import SVC, SVR
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from imblearn.over_sampling import SMOTE
+from matplotlib.backends.backend_pdf import PdfPages
+import ssl
 import imaplib
 import email
-import requests
 
-# === Fix font warnings ===
-matplotlib.rcParams['font.family'] = 'DejaVu Sans'
-warnings.filterwarnings("ignore", module="matplotlib")
-
-# === Email & API Config ===
-EMAIL_ADDRESS = "akashvishnu6680@gmail.com"
-EMAIL_PASSWORD = "swpe pwsx ypqo hgnk"  # Use Gmail App Password
-TOGETHER_API_KEY = "tgp_v1_ecSsk1__FlO2mB_gAaaP2i-Affa6Dv8OCVngkWzBJUY"
-
-IMAP_SERVER = "imap.gmail.com"
+# === Email Config ===
+EMAIL_ADDRESS = st.secrets["EMAIL_ADDRESS"]
+EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+TOGETHER_API_KEY = st.secrets["TOGETHER_API_KEY"]
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
+IMAP_SERVER = "imap.gmail.com"
 
 # === Streamlit Config ===
-st.set_page_config(page_title="🤖 Agentic AI ML & Email App", layout="wide")
-st.title("🤖 Agentic AI: ML + Email Auto-Responder")
+st.set_page_config(page_title="⚡ Fast AutoML Agent", layout="wide")
+st.title("🤖 Fast AutoML + Email Agent")
 
-# === EMAIL FUNCTIONS ===
+# === Upload and Detect Task ===
+st.sidebar.header("📊 Upload Dataset")
+uploaded_file = st.sidebar.file_uploader("Upload a dataset", type=["csv", "xlsx"])
+
+if uploaded_file:
+    ext = uploaded_file.name.split(".")[-1]
+    df = pd.read_csv(uploaded_file) if ext == "csv" else pd.read_excel(uploaded_file)
+    st.write("✅ Data Preview")
+    st.dataframe(df.head())
+
+    target = st.sidebar.selectbox("Select Target Column", df.columns)
+
+    # Task detection
+    task_type = "classification" if df[target].nunique() <= 20 or df[target].dtype == 'object' else "regression"
+    st.info(f"🔍 Detected Task Type: **{task_type.title()}**")
+
+    X = df.drop(columns=[target])
+    y = df[target]
+
+    # Handle imbalance (optional for classification)
+    if task_type == "classification":
+        X = pd.get_dummies(X)
+        sm = SMOTE()
+        X, y = sm.fit_resample(X, y)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # === Model list ===
+    classifiers = [
+        ("RandomForest", RandomForestClassifier()),
+        ("GradientBoosting", GradientBoostingClassifier()),
+        ("KNN", KNeighborsClassifier()),
+        ("SVM", SVC(probability=True)),
+        ("LogisticRegression", LogisticRegression(max_iter=1000))
+    ]
+
+    regressors = [
+        ("RandomForest", RandomForestRegressor()),
+        ("GradientBoosting", GradientBoostingRegressor()),
+        ("KNN", KNeighborsRegressor()),
+        ("SVM", SVR()),
+        ("LinearRegression", LinearRegression())
+    ]
+
+    models = classifiers if task_type == "classification" else regressors
+    scores = []
+    best_models = []
+
+    for name, model in models:
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        score = accuracy_score(y_test, preds) if task_type == "classification" else r2_score(y_test, preds)
+        scores.append((name, score))
+        best_models.append((name, model))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+    top_models = scores[:3]
+
+    st.subheader("🏆 Top 3 Models")
+    for name, score in top_models:
+        st.markdown(f"- **{name}** → Score: `{score:.2f}`")
+
+    # === Generate PDF Report ===
+    with PdfPages("model_report.pdf") as pdf:
+        plt.figure(figsize=(8, 4))
+        names, vals = zip(*scores)
+        sns.barplot(x=vals, y=names)
+        plt.title("Model Comparison")
+        plt.xlabel("Accuracy" if task_type == "classification" else "R2 Score")
+        pdf.savefig()
+        plt.close()
+
+    st.success("📄 Model Report generated as PDF.")
+
+    # === Email Report ===
+    recipient_email = st.text_input("Enter Client Email to Send Report")
+    if st.button("📤 Send Report via Email") and recipient_email:
+        msg = EmailMessage()
+        msg["Subject"] = f"AutoML Report - {task_type.title()}"
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = recipient_email
+        msg.set_content("Attached is the AutoML model performance report.\n\nRegards,\nAgentic AI")
+
+        with open("model_report.pdf", "rb") as f:
+            msg.add_attachment(f.read(), maintype="application", subtype="pdf", filename="model_report.pdf")
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        st.success(f"✅ Report sent to {recipient_email}")
+
+# === Email Auto-Responder ===
+st.markdown("---")
+st.header("📬 Auto Email Response (From Gmail Inbox)")
+
 def fetch_latest_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
@@ -40,8 +142,8 @@ def fetch_latest_email():
         if not ids:
             return None, None, None
 
-        latest_email_id = ids[-1]
-        result, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+        latest_id = ids[-1]
+        result, msg_data = mail.fetch(latest_id, "(RFC822)")
         raw_email = msg_data[0][1]
         email_message = email.message_from_bytes(raw_email)
 
@@ -60,33 +162,16 @@ def fetch_latest_email():
         return from_email, subject, body
 
     except Exception as e:
-        st.error(f"❌ Email error: {e}")
+        st.error(f"❌ Error fetching email: {e}")
         return None, None, None
 
-def generate_reply_together_ai(msg):
-    url = "https://api.together.xyz/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {TOGETHER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "messages": [
-            {"role": "system", "content": "You're a helpful assistant replying to business emails clearly."},
-            {"role": "user", "content": msg}
-        ],
-        "temperature": 0.7
-    }
-    response = requests.post(url, headers=headers, json=payload)
-    return response.json()["choices"][0]["message"]["content"]
-
-def send_reply(to_email, subject, body):
+def send_auto_reply(to_email, subject, reply_content):
     try:
         msg = EmailMessage()
-        msg["Subject"] = "RE: " + subject
+        msg["Subject"] = f"RE: {subject}"
         msg["From"] = EMAIL_ADDRESS
         msg["To"] = to_email
-        msg.set_content(body)
+        msg.set_content(reply_content)
 
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
@@ -95,55 +180,37 @@ def send_reply(to_email, subject, body):
 
         return True
     except Exception as e:
-        st.error(f"❌ Send error: {e}")
+        st.error(f"❌ Failed to send reply: {e}")
         return False
 
-# === MACHINE LEARNING SECTION ===
-st.sidebar.header("📊 ML AutoML Setup")
-uploaded_file = st.sidebar.file_uploader("Upload your dataset (CSV)", type=["csv"])
-ml_type = st.sidebar.selectbox("Select task type", ["Classification", "Regression"])
-target = st.sidebar.text_input("Enter your target column")
+def generate_ai_reply(message):
+    url = "https://api.together.xyz/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {TOGETHER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant replying to business emails."},
+            {"role": "user", "content": message}
+        ]
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    return response.json()["choices"][0]["message"]["content"]
 
-if uploaded_file and target:
-    df = pd.read_csv(uploaded_file)
-    st.write("✅ Dataset Preview")
-    st.dataframe(df.head())
-
-    if ml_type == "Classification":
-        clf.setup(data=df, target=target, session_id=123, fold=3, n_jobs=-1, html=False)
-        model = clf.compare_models()
-        tuned_model = clf.tune_model(model)
-        clf.evaluate_model(tuned_model)
-        clf.interpret_model(tuned_model)
-        clf.save_model(tuned_model, 'my_model')
-        st.success("✅ Classification model trained and saved.")
-    else:
-        reg.setup(data=df, target=target, session_id=123, fold=3, n_jobs=-1, html=False)
-        model = reg.compare_models()
-        tuned_model = reg.tune_model(model)
-        reg.evaluate_model(tuned_model)
-        reg.interpret_model(tuned_model)
-        reg.save_model(tuned_model, 'my_model')
-        st.success("✅ Regression model trained and saved.")
-
-# === EMAIL UI & REPLY ===
-st.markdown("---")
-st.header("📧 Email Auto-Responder")
-
-if st.button("📥 Check Email and Auto-Reply"):
-    from_email, subject, message = fetch_latest_email()
-
+if st.button("📥 Check & Auto-Reply to Latest Email"):
+    from_email, subject, body = fetch_latest_email()
     if from_email:
-        st.subheader("📨 New Email")
-        st.markdown(f"*From:* {from_email}")
-        st.markdown(f"*Subject:* {subject}")
-        st.text_area("Client Message", value=message, height=150)
+        st.subheader("📨 Incoming Email")
+        st.markdown(f"**From:** {from_email}")
+        st.markdown(f"**Subject:** {subject}")
+        st.text_area("Message", value=body, height=150)
 
-        ai_reply = generate_reply_together_ai(message)
-        st.text_area("🤖 AI Generated Reply", value=ai_reply, height=180)
+        reply = generate_ai_reply(body)
+        st.text_area("🤖 AI Reply", value=reply, height=180)
 
-        if send_reply(from_email, subject, ai_reply):
-            st.success("✅ Reply sent to client.")
-            st.balloons()
+        if send_auto_reply(from_email, subject, reply):
+            st.success("✅ Reply sent successfully.")
     else:
-        st.info("📭 No new emails found.")
+        st.info("📭 No new unread emails.")
