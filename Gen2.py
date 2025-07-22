@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import os
 from email.message import EmailMessage
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, Binarizer, LabelEncoder
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -53,9 +53,18 @@ if uploaded_file:
     X = df.drop(columns=[target])
     y = df[target]
 
-    # Handle imbalance (optional for classification)
+    # === Encoding ===
+    for col in X.select_dtypes(include='object').columns:
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col].astype(str))
+
+    # === Feature Scaling ===
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X = pd.DataFrame(X_scaled, columns=X.columns)
+
+    # === Handle Imbalance (Classification Only) ===
     if task_type == "classification":
-        X = pd.get_dummies(X)
         sm = SMOTE()
         X, y = sm.fit_resample(X, y)
 
